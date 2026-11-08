@@ -1,6 +1,6 @@
 name: Release
 
-# Builds signed APKs/AAB for a version tag and creates a DRAFT release with
+# Builds signed APKs/AAB after CI and emulator tests and publishes a release with
 # checksums. Requires repository secrets (see docs/SIGNING.md):
 #   WAYDLP_KEYSTORE_BASE64, WAYDLP_KEYSTORE_PASSWORD, WAYDLP_KEY_ALIAS, WAYDLP_KEY_PASSWORD
 
@@ -12,7 +12,11 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,7 +67,7 @@ jobs:
         run: |
           BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
           for f in out/*.apk; do "$BT/apksigner" verify --print-certs "$f" | head -3; done
-      - name: Draft release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" out/* --draft --title "waydlp for Android $VERSION" --generate-notes
+        run: gh release create "v$VERSION" out/* --verify-tag --title "waydlp for Android $VERSION" --generate-notes

@@ -108,8 +108,9 @@ String redact(String s) {
       .split('\n')
       .map((line) {
         final l = line.toLowerCase();
-        if (l.contains('cookie:') || l.contains('authorization:') || l.contains('set-cookie'))
+        if (l.contains('cookie:') || l.contains('authorization:') || l.contains('set-cookie')) {
           return '[redacted header]';
+        }
         return line.replaceAllMapped(RegExp(r'://[^/\s@]+@'), (_) => '://***@');
       })
       .join('\n');

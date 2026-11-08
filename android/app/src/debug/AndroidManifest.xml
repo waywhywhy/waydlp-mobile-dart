@@ -4,4 +4,6 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Emulator smoke tests download a generated fixture from the host. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>
