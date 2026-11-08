@@ -22,6 +22,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -36,6 +38,16 @@ jobs:
           P=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
           [ "$V" = "$P" ] || { echo "::error::tag $V != pubspec $P"; exit 1; }
           echo "VERSION=$V" >> "$GITHUB_ENV"
+      - name: Check Android update version code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The most recently published release may also be a pre-release.
+          PREVIOUS=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '[.[] | select(.draft == false)][0].tag_name // empty')
+          if [ -n "$PREVIOUS" ]; then
+            git show "$PREVIOUS:pubspec.yaml" > "$RUNNER_TEMP/previous-pubspec.yaml"
+            python3 tool/check_obtainium.py --previous-pubspec "$RUNNER_TEMP/previous-pubspec.yaml"
+          fi
       - name: Restore signing key
         env:
           KEYSTORE_B64: ${{ secrets.WAYDLP_KEYSTORE_BASE64 }}
@@ -62,6 +74,7 @@ jobs:
           cp $O/flutter-apk/app-x86_64-release.apk out/waydlp-$VERSION-android-x64.apk
           cp $O/flutter-apk/app-release.apk out/waydlp-$VERSION-android-universal.apk
           cp $O/bundle/release/app-release.aab out/waydlp-$VERSION-android-universal.aab
+          python3 tool/check_obtainium.py --release-dir out
           cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Verify signatures
         run: |

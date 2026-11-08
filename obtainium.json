@@ -1,0 +1,12 @@
+{
+  "apps": [
+    {
+      "id": "io.github.waywhywhy.waydlp",
+      "url": "https://github.com/waywhywhy/waydlp-mobile-dart",
+      "author": "waywhywhy",
+      "name": "waydlp",
+      "additionalSettings": "{\"apkFilterRegEx\":\"^waydlp-.*-android-universal[.]apk$\",\"includePrereleases\":false,\"autoApkFilterByArch\":false,\"verifyLatestTag\":true}"
+    }
+  ],
+  "settings": null
+}

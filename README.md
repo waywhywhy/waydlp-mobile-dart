@@ -32,6 +32,13 @@ Download the signed **0.1.0** APKs from the [Releases page](https://github.com/w
 
 Android 7.0 (API 24) or newer is required.
 
+### Obtainium
+
+[Add waydlp to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22io.github.waywhywhy.waydlp%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fwaywhywhy%2Fwaydlp-mobile-dart%22%2C%22author%22%3A%22waywhywhy%22%2C%22name%22%3A%22waydlp%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22%5Ewaydlp-.%2A-android-universal%5B.%5Dapk%24%5C%22%2C%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22autoApkFilterByArch%5C%22%3Afalse%2C%5C%22verifyLatestTag%5C%22%3Atrue%7D%22%7D) to install and track updates directly
+from GitHub Releases. The configuration selects the universal APK for ARM64,
+ARMv7 and x64 and follows stable releases. See the [Obtainium guide](docs/OBTAINIUM.md)
+for manual setup or import [obtainium.json](obtainium.json) from Obtainium's Import/Export page.
+
 ## How it works
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
