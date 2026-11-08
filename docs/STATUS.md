@@ -9,13 +9,15 @@
 | Static analysis | `flutter analyze`: no issues (Flutter 3.47.9 / Dart 3.13.7) |
 | Android build | `flutter build apk --debug` with Flutter 3.47.9, AGP 9.1, JDK 17, SDK 36, NDK 28.2: Kotlin compiles and the APK is produced |
 | APK contents | `aapt2 dump`: app ID `io.github.waywhywhy.waydlp`, min/target SDK 24/36, the expected permissions only, the `ACTION_SEND text/plain` share filter, the `DownloadService` (`dataSync`), the FileProvider, `extractNativeLibs=true`, and libpython/libffmpeg/libqjs for arm64-v8a, armeabi-v7a and x86_64 |
+| Android 15 emulator (API 35, x86_64), 2026-11-08 | `flutter test integration_test/download_test.dart -d emulator-5554`: passed in 19 seconds. Real embedded runtime startup, probing, original WAV download, FFmpeg MP3 conversion, foreground service execution, MediaStore save/existence/delete, SQLite history and Home/Queue/History/Settings navigation |
+| Release signing setup | Persistent RSA-4096 key generated; four repository signing secrets configured. The release workflow verifies APK signatures before publication |
 
 ## Not yet verified
 
-* Running on a device or emulator. This machine can't run the Android emulator, so none of these have been exercised: unpacking the runtime on first start, probing, downloading, the foreground service and notifications, MediaStore/SAF saving, share intents, and open/share/delete.
-* Release signing (it needs your key; see `SIGNING.md`).
+* Physical phones, other Android versions and ARM ABIs have not been exercised end to end.
+* Notifications, long background sessions, SAF folder selection, incoming share intents and opening/sharing downloaded files still need separate device checks.
 
-Please install the CI or debug APK on a real phone before publishing.
+The emulator smoke test is a required release check. Physical-device coverage remains a limitation of this first release.
 
 ## Known limitations
 

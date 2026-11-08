@@ -34,4 +34,4 @@ Add these repository secrets:
 | `WAYDLP_KEY_ALIAS` | `waydlp` |
 | `WAYDLP_KEY_PASSWORD` | key password |
 
-`release.yml` refuses to publish if they are missing. It verifies the signatures with `apksigner` and creates a **draft** release.
+`release.yml` refuses to publish if they are missing. Formatting, analysis, unit/widget tests, APK builds and the real Android emulator smoke test must pass first. It verifies the signatures with `apksigner` and then publishes the release.

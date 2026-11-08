@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
           script: flutter test integration_test/download_test.dart -d emulator-5554
 
   build:
-    name: Build APKs (debug-signed unless secrets are present)
+    name: Build test APKs (debug-signed)
     needs: check
     runs-on: ubuntu-latest
     steps:
