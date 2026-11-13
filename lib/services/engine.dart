@@ -7,7 +7,22 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+
+/// Age in days of a date-based yt-dlp version such as `2025.11.12`
+/// (null for other version formats).
+int? ytDlpAgeDays(String? version, {DateTime? now}) {
+  final m = RegExp(r'^(\d{4})\.(\d{1,2})\.(\d{1,2})').firstMatch(version?.trim() ?? '');
+  if (m == null) return null;
+  final released = DateTime.utc(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!));
+  final n = (now ?? DateTime.now()).toUtc();
+  final days = DateTime.utc(n.year, n.month, n.day).difference(released).inDays;
+  return days < 0 ? 0 : days;
+}
+
+/// yt-dlp itself warns once a version is older than this; sites start failing.
+const ytDlpStaleDays = 90;
 
 class EngineException implements Exception {
   EngineException(this.code, this.message, [this.details = '']);
@@ -35,6 +50,11 @@ class Engine {
   final EventChannel _events;
   Stream<Object?>? _stream;
 
+  /// Installed yt-dlp version (null until known). Every screen listens to it.
+  final ValueNotifier<String?> version = ValueNotifier(null);
+
+  Future<String>? _updating;
+
   Stream<Object?> get rawEvents => _stream ??= _events.receiveBroadcastStream().asBroadcastStream();
 
   Stream<JobEvent> get jobEvents => rawEvents
@@ -54,8 +74,11 @@ class Engine {
   }
 
   /// Unpack the embedded runtime (first start) and report versions.
-  Future<Map<String, Object?>> init() async =>
-      Map<String, Object?>.from(await _call<Map<Object?, Object?>>('init') ?? const {});
+  Future<Map<String, Object?>> init() async {
+    final info = Map<String, Object?>.from(await _call<Map<Object?, Object?>>('init') ?? const {});
+    version.value = info['ytDlpVersion'] as String?;
+    return info;
+  }
 
   /// Returns yt-dlp's JSON output, or throws [EngineException] with stderr in `details`.
   Future<String> probe(String url, List<String> args) async =>
@@ -84,6 +107,9 @@ class Engine {
   Future<void> stop(String jobId, {required bool keepPartial}) =>
       _call<void>('stop', {'id': jobId, 'keepPartial': keepPartial});
 
+  /// Delete the partial data a paused job kept (it is being cancelled or removed).
+  Future<void> discard(String jobId) => _call<void>('discard', {'id': jobId});
+
   Future<void> setMaxConcurrent(int n) => _call<void>('setMaxConcurrent', {'n': n});
 
   /// Paths the args builder needs: `{"output": ..., "temp": ...}` for a job.
@@ -92,7 +118,21 @@ class Engine {
     return m.map((k, v) => MapEntry(k.toString(), v.toString()));
   }
 
-  Future<String> updateYtDlp() async => await _call<String>('updateYtDlp') ?? 'unknown';
+  /// Update yt-dlp in place. Concurrent callers share one update.
+  Future<String> updateYtDlp() => _updating ??= _update().whenComplete(() => _updating = null);
+
+  /// Whether an update is running right now.
+  bool get isUpdating => _updating != null;
+
+  Future<String> _update() async {
+    final r = await _call<String>('updateYtDlp') ?? 'unknown';
+    try {
+      version.value = await ytDlpVersion() ?? version.value;
+    } on EngineException {
+      // Keep the previous version label.
+    }
+    return r;
+  }
 
   Future<void> openUri(String uri, String mime) => _call<void>('open', {'uri': uri, 'mime': mime});
   Future<void> shareUri(String uri, String mime) => _call<void>('share', {'uri': uri, 'mime': mime});
@@ -114,6 +154,12 @@ class Engine {
   /// Results of jobs that finished while no UI was attached.
   Future<List<Map<Object?, Object?>>> drainFinished() async =>
       (await _call<List<Object?>>('drainFinished') ?? const []).whereType<Map<Object?, Object?>>().toList();
+
+  /// History ids of jobs the native service is still running or has queued.
+  Future<Set<int>> activeHistoryIds() async =>
+      (await _call<List<Object?>>('activeHistoryIds') ?? const []).whereType<int>().toSet();
+
+  Future<String?> ytDlpVersion() => _call<String>('ytDlpVersion');
 
   Future<void> clearCache() => _call<void>('clearCache');
   Future<int> cacheSize() async => await _call<int>('cacheSize') ?? 0;

@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private var pendingShared: String? = null
     private var folderResult: MethodChannel.Result? = null
     private var notifResult: MethodChannel.Result? = null
+    private var ownSink: EventChannel.EventSink? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,10 +53,12 @@ class MainActivity : FlutterActivity() {
         EventChannel(messenger, "io.github.waywhywhy.waydlp/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                 DownloadEngine.sink = events
+                ownSink = events
             }
 
             override fun onCancel(arguments: Any?) {
-                DownloadEngine.sink = null
+                if (DownloadEngine.sink === ownSink) DownloadEngine.sink = null
+                ownSink = null
             }
         })
         MethodChannel(messenger, "io.github.waywhywhy.waydlp/engine").setMethodCallHandler { call, result ->
@@ -65,6 +68,18 @@ class MainActivity : FlutterActivity() {
                 result.error("native", e.message ?: e.javaClass.simpleName, null)
             }
         }
+    }
+
+    /**
+     * Flutter never calls onCancel when the engine is destroyed (Back closes the
+     * activity while the download service keeps the process alive). Without
+     * this, the engine kept a dead sink: shared links were dropped and results
+     * of background jobs were never stored for the next UI to pick up.
+     */
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (DownloadEngine.sink === ownSink) DownloadEngine.sink = null
+        ownSink = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun io(result: MethodChannel.Result, block: suspend () -> Any?) {
@@ -173,6 +188,10 @@ class MainActivity : FlutterActivity() {
                 }
             }
             "pickFolder" -> {
+                if (folderResult != null) {
+                    result.error("busy", "A folder picker is already open", null)
+                    return
+                }
                 folderResult = result
                 @Suppress("DEPRECATION")
                 startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER)
@@ -186,6 +205,12 @@ class MainActivity : FlutterActivity() {
                 pendingShared = null
             }
             "drainFinished" -> result.success(DownloadEngine.drainFinished(ctx))
+            "discard" -> {
+                DownloadEngine.discard(ctx, call.argument<String>("id")!!)
+                result.success(null)
+            }
+            "activeHistoryIds" -> result.success(DownloadEngine.activeHistoryIds())
+            "ytDlpVersion" -> io(result) { DownloadEngine.ytDlpVersion(ctx) }
             "cacheSize" -> io(result) { dirSize(File(ctx.filesDir, "jobs")) + dirSize(ctx.cacheDir) }
             "clearCache" -> io(result) {
                 if (DownloadEngine.activeCount() == 0) File(ctx.filesDir, "jobs").deleteRecursively()
@@ -223,11 +248,16 @@ class MainActivity : FlutterActivity() {
         if (requestCode != PICK_FOLDER) return
         val uri = data?.data
         if (resultCode == RESULT_OK && uri != null) {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            folderResult?.success(uri.toString())
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+                folderResult?.success(uri.toString())
+            } catch (e: SecurityException) {
+                // Some providers can't grant lasting access; previously this crashed the app.
+                folderResult?.error("folder", "This folder can't be used for saving. Choose another one.", null)
+            }
         } else {
             folderResult?.success(null)
         }

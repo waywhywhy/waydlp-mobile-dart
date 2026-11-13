@@ -30,10 +30,29 @@ bool _isLocalHost(String host) {
   return false;
 }
 
+/// Remove sentence punctuation that text around a link leaves attached, e.g.
+/// "(see https://x.com/v/1)." → "https://x.com/v/1". Brackets are only
+/// removed when unbalanced, so "https://en.wikipedia.org/wiki/A_(b)" survives.
+String trimLinkPunctuation(String s) {
+  var t = s.replaceAll(RegExp(r'''^["'<(\[]+'''), '');
+  while (t.isNotEmpty) {
+    final c = t[t.length - 1];
+    if ('.,;:!?"\'>'.contains(c)) {
+      t = t.substring(0, t.length - 1);
+    } else if (c == ')' && ')'.allMatches(t).length > '('.allMatches(t).length) {
+      t = t.substring(0, t.length - 1);
+    } else if (c == ']' && ']'.allMatches(t).length > '['.allMatches(t).length) {
+      t = t.substring(0, t.length - 1);
+    } else {
+      break;
+    }
+  }
+  return t;
+}
+
 /// Validate and conservatively normalise a user-supplied URL.
 Uri validateUrl(String input) {
-  var s = input.trim();
-  s = s.replaceAll(RegExp(r'''^["'<]+|["'>]+$'''), '').trim();
+  var s = trimLinkPunctuation(input.trim()).trim();
   if (s.isEmpty) throw const UrlError('Please enter a URL.');
   if (RegExp(r'\s').hasMatch(s)) throw const UrlError("This doesn't look like a web address.");
   final lower = s.toLowerCase();

@@ -61,6 +61,12 @@ class Job {
   final List<String> warnings = [];
   Failure? failure;
   int attempts = 0;
+
+  /// Invalidates a pending automatic-retry timer (manual retry, cancel, remove).
+  int retryGen = 0;
+
+  /// yt-dlp was already updated once for this job after an "outdated" failure.
+  bool healed = false;
   final List<String> log = [];
 
   String get displayTitle => title ?? url.toString();
@@ -79,6 +85,12 @@ class Downloads extends ChangeNotifier {
   final List<Job> jobs = [];
   int _seq = 0;
 
+  /// Bumped after every history write has completed, so the History tab
+  /// reloads once the database is up to date (not on every progress line).
+  final ValueNotifier<int> historyRevision = ValueNotifier(0);
+
+  void _historyChanged() => historyRevision.value++;
+
   int get activeCount => jobs.where((j) => j.state.isActive).length;
 
   Job? byId(String id) {
@@ -92,7 +104,14 @@ class Downloads extends ChangeNotifier {
   Future<Job> add(Uri url, DownloadOptions options, {bool isPlaylist = false, String? title, String? thumbnail}) async {
     final s = settings.value;
     // Validate early (paths are placeholders here; real ones come from native).
-    buildDownloadArgs(o: options, outputDir: '/x', tempDir: '/t', isPlaylist: isPlaylist, template: s.filenameTemplate);
+    buildDownloadArgs(
+      o: options,
+      outputDir: '/x',
+      tempDir: '/t',
+      isPlaylist: isPlaylist,
+      template: s.filenameTemplate,
+      net: NetworkOptions(rateLimit: s.rateLimit),
+    );
     final job = Job(
       id: '${DateTime.now().millisecondsSinceEpoch}-${_seq++}',
       url: url,
@@ -111,6 +130,7 @@ class Downloads extends ChangeNotifier {
         isPlaylist: isPlaylist,
         thumbnail: thumbnail,
       );
+      _historyChanged();
     }
     jobs.insert(0, job);
     notifyListeners();
@@ -120,11 +140,14 @@ class Downloads extends ChangeNotifier {
 
   Future<void> _start(Job job) async {
     final s = settings.value;
+    job.retryGen++; // a manual (re)start supersedes any pending automatic retry
     job
       ..state = JobState.queued
       ..stage = 'Waiting in queue'
       ..failure = null
       ..attempts += 1;
+    // Classify a new failure only by this attempt's output.
+    job.log.clear();
     notifyListeners();
     try {
       final paths = await engine.jobPaths(job.id);
@@ -146,7 +169,8 @@ class Downloads extends ChangeNotifier {
         historyId: job.historyId,
       );
     } on ArgsError catch (e) {
-      _fail(job, Failure(ErrorKind.unknown, e.message, e.message));
+      // Invalid options never fix themselves: fail without automatic retries.
+      _fail(job, Failure(ErrorKind.unknown, e.message, e.message), retry: false);
     } on EngineException catch (e) {
       _fail(job, Failure(ErrorKind.engine, e.message, e.details));
     }
@@ -154,7 +178,12 @@ class Downloads extends ChangeNotifier {
 
   void _onEvent(JobEvent e) {
     final job = byId(e.jobId);
-    if (job == null) return;
+    if (job == null) {
+      // A job started by an earlier UI (the service outlived it): the native
+      // side stored its result, so apply it now.
+      if (const {'finished', 'failed', 'cancelled'}.contains(e.type)) unawaited(drainBackgroundResults());
+      return;
+    }
     switch (e.type) {
       case 'started':
         job
@@ -210,18 +239,53 @@ class Downloads extends ChangeNotifier {
         final f = Failure.fromOutput('${e.data['error'] ?? ''}\n${job.log.join('\n')}');
         _fail(job, f);
     }
+    // The native side also stores terminal results for UIs that come later;
+    // consume them now so they don't pile up (ours are skipped).
+    if (const {'finished', 'failed'}.contains(e.type) || (e.type == 'cancelled' && e.data['paused'] != true)) {
+      unawaited(drainBackgroundResults());
+    }
     notifyListeners();
   }
 
-  void _fail(Job job, Failure f) {
+  void _fail(Job job, Failure f, {bool retry = true}) {
     final retries = settings.value.autoRetries;
-    if (f.kind.isTransient && job.attempts <= retries) {
+    if (retry && f.kind == ErrorKind.extractorOutdated && settings.value.autoUpdateYtDlp && !job.healed) {
+      // Self-healing: an outdated yt-dlp is the usual cause (e.g. YouTube's
+      // HTTP 403). Update it once, then try again.
+      job
+        ..healed = true
+        ..state = JobState.waitingRetry
+        ..failure = f
+        ..stage = 'Updating yt-dlp, then retrying…';
+      final gen = ++job.retryGen;
+      unawaited(
+        engine.updateYtDlp().then<void>(
+          (_) {
+            if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
+              unawaited(_start(job..attempts = 0));
+            }
+          },
+          onError: (Object e) {
+            if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
+              job
+                ..state = JobState.failed
+                ..stage = f.kind.title;
+              _recordHistory(job);
+              notifyListeners();
+            }
+          },
+        ),
+      );
+    } else if (retry && f.kind.isTransient && job.attempts <= retries) {
       job
         ..state = JobState.waitingRetry
         ..failure = f
         ..stage = '${f.kind.title} — retrying in ${5 * job.attempts}s';
+      final gen = ++job.retryGen;
       Timer(Duration(seconds: 5 * job.attempts), () {
-        if (job.state == JobState.waitingRetry) unawaited(_start(job));
+        if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
+          unawaited(_start(job));
+        }
       });
     } else {
       job
@@ -242,22 +306,27 @@ class Downloads extends ChangeNotifier {
       _ => EntryStatus.cancelled,
     };
     unawaited(
-      h.finish(
-        id,
-        status,
-        files: job.savedUris,
-        size: job.savedBytes == 0 ? null : job.savedBytes,
-        error: job.failure == null ? null : '${job.failure!.kind.title}: ${job.failure!.summary}',
-        mime: job.mime,
-        title: job.isPlaylist ? null : job.title,
-      ),
+      h
+          .finish(
+            id,
+            status,
+            files: job.savedUris,
+            size: job.savedBytes == 0 ? null : job.savedBytes,
+            error: job.failure == null ? null : '${job.failure!.kind.title}: ${job.failure!.summary}',
+            mime: job.mime,
+            title: job.isPlaylist ? null : job.title,
+          )
+          .then((_) => _historyChanged()),
     );
   }
 
   Future<void> cancel(Job job) async {
+    if (job.state.isFinished) return;
     if (job.state == JobState.running || job.state == JobState.queued) {
       await engine.stop(job.id, keepPartial: false);
     } else {
+      // Paused jobs kept their partial files for resuming; nothing will use them now.
+      if (job.state == JobState.paused) unawaited(_discard(job));
       job
         ..state = JobState.cancelled
         ..stage = 'Cancelled';
@@ -266,46 +335,128 @@ class Downloads extends ChangeNotifier {
     }
   }
 
+  /// Delete partial data kept by a paused or failed job.
+  Future<void> _discard(Job job) => engine.discard(job.id).catchError((Object _) {});
+
   Future<void> pause(Job job) async {
     if (job.state == JobState.running || job.state == JobState.queued) {
       await engine.stop(job.id, keepPartial: true);
     }
   }
 
-  Future<void> resume(Job job) => _start(job..attempts = job.state == JobState.paused ? job.attempts - 1 : 0);
+  Future<void> resume(Job job) {
+    // A paused job continues its retry budget; failed/cancelled ones get a fresh one.
+    if (job.state != JobState.paused) job.healed = false;
+    return _start(job..attempts = job.state == JobState.paused ? job.attempts - 1 : 0);
+  }
 
   void remove(Job job) {
     if (job.state.isActive) unawaited(engine.stop(job.id, keepPartial: false));
+    if (job.state == JobState.paused || job.state == JobState.failed) unawaited(_discard(job));
+    if (!job.state.isFinished) {
+      // Also stops a pending automatic retry from re-adding the job.
+      job
+        ..state = JobState.cancelled
+        ..stage = 'Removed from the queue';
+      _recordHistory(job);
+    }
     jobs.remove(job);
     notifyListeners();
   }
 
+  /// Pause every queued, running or retry-waiting download.
+  Future<void> pauseAll() async {
+    for (final j in jobs.where((j) => j.state.isActive).toList()) {
+      if (j.state == JobState.waitingRetry) {
+        j
+          ..retryGen = j.retryGen + 1
+          ..state = JobState.paused
+          ..stage = 'Paused';
+      } else {
+        await pause(j);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Resume every paused download.
+  Future<void> resumeAll() async {
+    for (final j in jobs.where((j) => j.state == JobState.paused).toList()) {
+      await resume(j);
+    }
+  }
+
+  /// Retry every failed download with a fresh retry budget.
+  Future<void> retryFailed() async {
+    for (final j in jobs.where((j) => j.state == JobState.failed).toList()) {
+      await resume(j);
+    }
+  }
+
+  /// Automatic daily yt-dlp update (when enabled). Skipped while downloads
+  /// run, and on metered connections when Wi-Fi only is on. Returns the
+  /// updater's message, or null when nothing was attempted.
+  Future<String?> maybeAutoUpdate({DateTime? now}) async {
+    final s = settings.value;
+    final t = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    if (!s.autoUpdateYtDlp || activeCount > 0 || engine.isUpdating) return null;
+    final last = s.ytDlpCheckedAt;
+    if (last != null && t - last < const Duration(days: 1).inMilliseconds && t >= last) return null;
+    if (s.wifiOnly && await engine.isMetered()) return null;
+    await settings.update(settings.value.copyWith(ytDlpCheckedAt: () => t));
+    try {
+      return await engine.updateYtDlp();
+    } on EngineException {
+      return null; // Offline or GitHub unreachable: try again tomorrow.
+    }
+  }
+
   void clearFinished() {
+    for (final j in jobs.where((j) => j.state == JobState.failed)) {
+      unawaited(_discard(j));
+    }
     jobs.removeWhere((j) => j.state.isFinished);
     notifyListeners();
   }
 
   /// Apply results of jobs that finished while the UI was detached.
   Future<void> drainBackgroundResults() async {
+    // Jobs this UI tracks record their own (richer) result.
+    final known = {for (final j in jobs) ?j.historyId};
+    var changed = false;
     for (final r in await engine.drainFinished()) {
       final hid = r['historyId'];
-      if (hid is int && history != null) {
+      final entry = hid is int && history != null && !known.contains(hid) ? await history!.get(hid) : null;
+      if (hid is int && entry != null && entry.status == EntryStatus.inProgress) {
         final ok = r['ok'] == true;
+        final cancelled = r['cancelled'] == true;
+        changed = true;
         await history!.finish(
           hid,
-          ok ? EntryStatus.completed : EntryStatus.failed,
+          ok
+              ? EntryStatus.completed
+              : cancelled
+              ? EntryStatus.cancelled
+              : EntryStatus.failed,
           files: ((r['uris'] as List<Object?>?) ?? const []).whereType<String>().toList(),
-          size: r['size'] as int?,
+          size: switch (r['size']) {
+            final int n when n > 0 => n,
+            _ => null,
+          },
           mime: r['mime'] as String?,
-          error: ok ? null : Failure.fromOutput(r['error'] as String? ?? '').kind.title,
+          error: ok || cancelled ? null : Failure.fromOutput(r['error'] as String? ?? '').kind.title,
+          // Quick downloads started without analysis only knew the link.
+          title: entry.isPlaylist ? null : r['title'] as String?,
         );
       }
     }
+    if (changed) _historyChanged();
   }
 
   @override
   void dispose() {
     unawaited(_sub.cancel());
+    historyRevision.dispose();
     super.dispose();
   }
 }

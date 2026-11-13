@@ -42,13 +42,19 @@ class NetworkOptions {
   final String? rateLimit;
 }
 
+/// Throws [ArgsError] unless [r] is empty or a yt-dlp rate such as 2M or 500K.
+void validateRateLimit(String r) {
+  final t = r.trim();
+  if (t.isNotEmpty && !RegExp(r'^\d+(\.\d+)?[KMGkmg]?$').hasMatch(t)) {
+    throw ArgsError('Invalid speed limit "$t". Use e.g. 2M or 500K.');
+  }
+}
+
 List<String> _base(NetworkOptions net) {
   final a = <String>['--ignore-config', '--color', 'never'];
   final r = net.rateLimit?.trim();
   if (r != null && r.isNotEmpty) {
-    if (!RegExp(r'^\d+(\.\d+)?[KMGkmg]?$').hasMatch(r)) {
-      throw ArgsError('Invalid speed limit "$r". Use e.g. 2M or 500K.');
-    }
+    validateRateLimit(r);
     a.addAll(['--limit-rate', r]);
   }
   a.addAll(['--retries', '${net.retries}', '--fragment-retries', '${net.retries}', '--socket-timeout', '30']);

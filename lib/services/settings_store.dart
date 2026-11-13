@@ -22,6 +22,8 @@ class Settings {
     this.filenameTemplate = '%(title).150B [%(id)s].%(ext)s',
     this.autoRetries = 2,
     this.rateLimit = '',
+    this.autoUpdateYtDlp = true,
+    this.ytDlpCheckedAt,
   });
 
   static const schemaVersion = 1;
@@ -41,6 +43,14 @@ class Settings {
   final int autoRetries;
   final String rateLimit;
 
+  /// Update yt-dlp at most once a day, and once more when a download fails
+  /// because yt-dlp is outdated. On by default: the bundled copy ages with
+  /// the app and sites (YouTube especially) block old versions.
+  final bool autoUpdateYtDlp;
+
+  /// Last automatic yt-dlp update check (milliseconds since epoch).
+  final int? ytDlpCheckedAt;
+
   DownloadOptions get defaultOptions => presetById(defaultPreset).options;
 
   Settings copyWith({
@@ -58,6 +68,8 @@ class Settings {
     String? filenameTemplate,
     int? autoRetries,
     String? rateLimit,
+    bool? autoUpdateYtDlp,
+    int? Function()? ytDlpCheckedAt,
   }) => Settings(
     defaultPreset: defaultPreset ?? this.defaultPreset,
     defaultAudio: defaultAudio ?? this.defaultAudio,
@@ -73,6 +85,8 @@ class Settings {
     filenameTemplate: filenameTemplate ?? this.filenameTemplate,
     autoRetries: (autoRetries ?? this.autoRetries).clamp(0, 5),
     rateLimit: rateLimit ?? this.rateLimit,
+    autoUpdateYtDlp: autoUpdateYtDlp ?? this.autoUpdateYtDlp,
+    ytDlpCheckedAt: ytDlpCheckedAt != null ? ytDlpCheckedAt() : this.ytDlpCheckedAt,
   );
 
   Map<String, Object?> toJson() => {
@@ -91,6 +105,8 @@ class Settings {
     'filenameTemplate': filenameTemplate,
     'autoRetries': autoRetries,
     'rateLimit': rateLimit,
+    'autoUpdateYtDlp': autoUpdateYtDlp,
+    'ytDlpCheckedAt': ytDlpCheckedAt,
   };
 
   /// Unknown keys are ignored and missing keys use defaults, so older and
@@ -113,6 +129,8 @@ class Settings {
       filenameTemplate: get('filenameTemplate', d.filenameTemplate),
       autoRetries: get<int>('autoRetries', d.autoRetries).clamp(0, 5),
       rateLimit: get('rateLimit', d.rateLimit),
+      autoUpdateYtDlp: get('autoUpdateYtDlp', d.autoUpdateYtDlp),
+      ytDlpCheckedAt: j['ytDlpCheckedAt'] is int ? j['ytDlpCheckedAt'] as int : null,
     );
   }
 }

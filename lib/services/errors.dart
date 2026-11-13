@@ -86,7 +86,15 @@ const _rules = <(ErrorKind, List<String>)>[
   (ErrorKind.conversionFailed, ['postprocessing:', 'conversion failed', 'error opening output file']),
   (
     ErrorKind.extractorOutdated,
-    ['unable to extract', 'please report this issue', 'update to the latest version', 'unable to parse'],
+    [
+      'unable to extract',
+      'please report this issue',
+      'update to the latest version',
+      'unable to parse',
+      // Sites (notably YouTube) answer an outdated yt-dlp with 403; retrying never helps.
+      'http error 403',
+      'is older than 90 days',
+    ],
   ),
 ];
 

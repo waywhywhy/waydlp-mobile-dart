@@ -23,7 +23,8 @@ class AppServices {
   final Map<String, Object?> engineInfo;
   final String? engineError;
 
-  String? get ytDlpVersion => engineInfo['ytDlpVersion'] as String?;
+  /// Installed yt-dlp version; follows updates (manual or automatic).
+  ValueNotifier<String?> get ytDlpVersion => engine.version;
 }
 
 class AppScope extends InheritedWidget {

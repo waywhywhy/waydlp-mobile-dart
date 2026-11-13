@@ -44,6 +44,7 @@ object DownloadEngine {
         @Volatile var stopping: Boolean = false,
         @Volatile var progressText: String = "",
         @Volatile var fraction: Float = -1f,
+        @Volatile var mediaTitle: String? = null,
     )
 
     private val jobs = ConcurrentHashMap<String, JobRecord>()
@@ -58,9 +59,32 @@ object DownloadEngine {
             FFmpeg.getInstance().init(ctx.applicationContext)
             initialized = true
         }
-        return mapOf(
-            "ytDlpVersion" to YoutubeDL.getInstance().version(ctx.applicationContext),
-        )
+        // The queue lives in the UI's memory, so partial data of paused or
+        // failed jobs from an earlier session can never be resumed: free it.
+        val active = synchronized(this) { jobs.keys.toSet() }
+        File(ctx.filesDir, "jobs").listFiles()?.filter { it.name !in active }?.forEach { it.deleteRecursively() }
+        return mapOf("ytDlpVersion" to ytDlpVersion(ctx))
+    }
+
+    /**
+     * youtubedl-android only records a version after its own updater ran, so a
+     * fresh install reported "unknown". Ask the bundled yt-dlp once instead.
+     */
+    fun ytDlpVersion(ctx: Context): String? {
+        YoutubeDL.getInstance().version(ctx.applicationContext)?.let { return it }
+        return try {
+            YoutubeDL.getInstance()
+                .execute(YoutubeDLRequest(emptyList()).addOption("--version"), "version", null)
+                .out.trim().lineSequence().firstOrNull()?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.w(TAG, "yt-dlp --version failed", e)
+            null
+        }
+    }
+
+    /** History ids of jobs that are queued or running right now. */
+    fun activeHistoryIds(): List<Int> = synchronized(this) {
+        (pending + running).mapNotNull { jobs[it]?.historyId }
     }
 
     fun emit(kind: String, payload: Map<String, Any?>) {
@@ -119,16 +143,36 @@ object DownloadEngine {
         }
         rec.keepPartial = keepPartial
         rec.stopping = true
+        // If yt-dlp hasn't started yet this is a no-op; run() checks `stopping`
+        // right before starting it.
         YoutubeDL.getInstance().destroyProcessById(id)
+    }
+
+    /** Pause every queued and running job, keeping partial data. */
+    fun pauseAll(ctx: Context) {
+        val ids = synchronized(this) { (pending + running).toList() }
+        ids.forEach { stop(ctx, it, keepPartial = true) }
+    }
+
+    /** Delete the kept partial data of a paused job that is being discarded. */
+    fun discard(ctx: Context, id: String) {
+        if (jobs.containsKey(id)) return // still queued or running: stop() handles it
+        jobDir(ctx, id).deleteRecursively()
     }
 
     private fun run(ctx: Context, rec: JobRecord) {
         emitJob("started", rec.id)
         val files = mutableListOf<String>()
         try {
+            if (rec.stopping) throw StoppedBeforeStart()
             val request = YoutubeDLRequest(rec.url).addCommands(rec.args)
             YoutubeDL.getInstance().execute(request, rec.id) { _, _, line ->
                 if (line.startsWith("[waydlp:file]")) files += line.removePrefix("[waydlp:file]").trim()
+                if (line.startsWith("[waydlp:item]")) {
+                    // index|count|id|title — remembered so background results get a real title.
+                    line.removePrefix("[waydlp:item]").split('|', limit = 4).getOrNull(3)
+                        ?.takeIf { it.isNotBlank() && it != "NA" }?.let { rec.mediaTitle = it }
+                }
                 if (line.startsWith("[waydlp:dl]")) updateProgress(rec, line)
                 emitJob("line", rec.id, mapOf("line" to line))
                 DownloadService.refresh(ctx)
@@ -146,12 +190,12 @@ object DownloadEngine {
             remember(ctx, rec, ok = true, saved = saved, error = null)
             DownloadService.notifyDone(ctx, rec.title, true)
         } catch (e: YoutubeDL.CanceledException) {
-            if (!rec.keepPartial) jobDir(ctx, rec.id).deleteRecursively()
-            emitJob("cancelled", rec.id, mapOf("paused" to rec.keepPartial))
+            stopped(ctx, rec)
+        } catch (e: StoppedBeforeStart) {
+            stopped(ctx, rec)
         } catch (e: YoutubeDLException) {
             if (rec.stopping) {
-                if (!rec.keepPartial) jobDir(ctx, rec.id).deleteRecursively()
-                emitJob("cancelled", rec.id, mapOf("paused" to rec.keepPartial))
+                stopped(ctx, rec)
             } else {
                 // Keep partial data so a retry can resume.
                 emitJob("failed", rec.id, mapOf("error" to (e.message ?: "yt-dlp failed")))
@@ -162,6 +206,7 @@ object DownloadEngine {
             Log.e(TAG, "job ${rec.id} failed", e)
             emitJob("failed", rec.id, mapOf("error" to "ERROR: ${e.message ?: e.javaClass.simpleName}"))
             remember(ctx, rec, ok = false, saved = emptyList(), error = e.message)
+            DownloadService.notifyDone(ctx, rec.title, false)
         } finally {
             synchronized(this) {
                 running -= rec.id
@@ -169,6 +214,14 @@ object DownloadEngine {
             }
             pump(ctx)
         }
+    }
+
+    private class StoppedBeforeStart : Exception()
+
+    private fun stopped(ctx: Context, rec: JobRecord) {
+        if (!rec.keepPartial) jobDir(ctx, rec.id).deleteRecursively()
+        emitJob("cancelled", rec.id, mapOf("paused" to rec.keepPartial))
+        if (!rec.keepPartial) remember(ctx, rec, ok = false, saved = emptyList(), error = null, cancelled = true)
     }
 
     private fun updateProgress(rec: JobRecord, line: String) {
@@ -196,18 +249,32 @@ object DownloadEngine {
     private const val PREFS = "waydlp.engine"
     private const val FINISHED = "finished"
 
-    private fun remember(ctx: Context, rec: JobRecord, ok: Boolean, saved: List<Map<String, Any?>>, error: String?) {
-        if (sink != null || rec.historyId == null) return
+    /**
+     * Store every terminal result: the UI that started a job may be gone even
+     * when a sink is attached (a newer UI does not know the job). The UI
+     * drains these and skips the jobs it already recorded itself.
+     */
+    private fun remember(
+        ctx: Context,
+        rec: JobRecord,
+        ok: Boolean,
+        saved: List<Map<String, Any?>>,
+        error: String?,
+        cancelled: Boolean = false,
+    ) {
+        if (rec.historyId == null) return
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         synchronized(this) {
             val arr = JSONArray(prefs.getString(FINISHED, "[]"))
             arr.put(JSONObject().apply {
                 put("historyId", rec.historyId)
                 put("ok", ok)
+                put("cancelled", cancelled)
                 put("uris", JSONArray(saved.mapNotNull { it["uri"] }))
                 put("size", saved.sumOf { (it["size"] as? Long) ?: 0L })
                 put("mime", saved.firstOrNull()?.get("mime"))
                 put("error", error?.take(4000))
+                put("title", rec.mediaTitle)
             })
             prefs.edit().putString(FINISHED, arr.toString()).apply()
         }
@@ -226,10 +293,12 @@ object DownloadEngine {
             mapOf(
                 "historyId" to o.optInt("historyId"),
                 "ok" to o.optBoolean("ok"),
+                "cancelled" to o.optBoolean("cancelled"),
                 "uris" to (0 until uris.length()).map { uris.getString(it) },
                 "size" to o.optLong("size"),
                 "mime" to o.optString("mime").ifEmpty { null },
                 "error" to o.optString("error").ifEmpty { null },
+                "title" to o.optString("title").ifEmpty { null },
             )
         }
     }

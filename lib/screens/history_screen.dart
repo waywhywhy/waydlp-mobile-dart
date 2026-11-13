@@ -23,20 +23,33 @@ class _HistoryScreenState extends State<HistoryScreen> {
   String _search = '';
   EntryStatus? _status;
   List<HistoryEntry> _rows = const [];
-  bool _listening = false;
+  ValueNotifier<int>? _revision;
+  HistoryStore? _history;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (!_listening) {
-      _listening = true;
-      AppScope.of(context).downloads.addListener(_reload);
+    if (_revision == null) {
+      final s = AppScope.of(context);
+      _history = s.history;
+      // Reload after history writes complete. Listening to the queue itself
+      // queried SQLite on every progress line and could read the row before
+      // its final status was written ("In progress" for a finished download).
+      _revision = s.downloads.historyRevision..addListener(_onRevision);
       unawaited(_reload());
     }
   }
 
+  void _onRevision() => unawaited(_reload());
+
+  @override
+  void dispose() {
+    _revision?.removeListener(_onRevision);
+    super.dispose();
+  }
+
   Future<void> _reload() async {
-    final h = AppScope.of(context).history;
+    final h = _history;
     if (h == null) return;
     final rows = await h.list(search: _search, status: _status);
     if (mounted) setState(() => _rows = rows);

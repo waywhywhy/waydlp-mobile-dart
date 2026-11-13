@@ -1,4 +1,4 @@
-# Project status (0.1.0)
+# Project status (0.2.0)
 
 ## Verified
 
@@ -25,4 +25,4 @@ The emulator smoke test is a required release check. Physical-device coverage re
 * Files created by a previous installation can't be deleted from the app (Android ownership rules).
 * There are no per-download custom yt-dlp arguments or custom executable paths (desktop-only features).
 * Queued jobs survive while the app process is alive. If Android kills the process, queued (not running) jobs are dropped; their history entries are marked interrupted.
-* Signed 0.1.0 APKs and an App Bundle are published on GitHub Releases. Required CI, including the real Android emulator smoke test, passed. The published x64 APK's checksum and signing certificate were independently verified after download.
+* Signed 0.1.0 and 0.2.0 APKs and App Bundles are published on GitHub Releases. Required CI, including the real Android emulator smoke test, passes before publication.

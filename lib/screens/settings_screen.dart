@@ -36,7 +36,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _updating = true;
       _updateResult = null;
     });
-    final engine = AppScope.of(context).engine;
+    final services = AppScope.of(context);
+    final engine = services.engine;
     String result;
     try {
       result = await engine.updateYtDlp();
@@ -87,13 +88,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     TextButton(
                       onPressed: () async {
-                        final uri = await services.engine.pickFolder();
+                        final messenger = ScaffoldMessenger.of(context);
+                        final String? uri;
+                        try {
+                          uri = await services.engine.pickFolder();
+                        } on EngineException catch (e) {
+                          messenger.showSnackBar(SnackBar(content: Text(e.message)));
+                          return;
+                        }
                         if (uri == null) return;
                         await services.engine.setSaveLocation(uri);
                         final label = Uri.decodeComponent(
                           uri.split('/').last,
                         ).replaceFirst('primary:', 'Internal storage/');
-                        await _set(s.copyWith(saveTreeUri: () => uri, saveLocationLabel: () => label));
+                        // Use current settings: others may have changed while the picker was open.
+                        await _set(
+                          services.settings.value.copyWith(saveTreeUri: () => uri, saveLocationLabel: () => label),
+                        );
                       },
                       child: const Text('Choose…'),
                     ),
@@ -102,23 +113,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               _slider('Simultaneous downloads', s.maxConcurrent, 1, 4, (v) => _set(s.copyWith(maxConcurrent: v))),
               _slider('Automatic retries', s.autoRetries, 0, 5, (v) => _set(s.copyWith(autoRetries: v))),
-              TextFormField(
-                initialValue: s.filenameTemplate,
-                decoration: const InputDecoration(labelText: 'File name template'),
-                onFieldSubmitted: (v) {
-                  try {
-                    validateTemplate(v);
-                    unawaited(_set(s.copyWith(filenameTemplate: v)));
-                  } on ArgsError catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-                  }
-                },
+              _CommitField(
+                label: 'File name template',
+                value: s.filenameTemplate,
+                validate: validateTemplate,
+                onCommit: (v) => _set(services.settings.value.copyWith(filenameTemplate: v.trim())),
               ),
               const SizedBox(height: 12),
-              TextFormField(
-                initialValue: s.rateLimit,
-                decoration: const InputDecoration(labelText: 'Speed limit (e.g. 2M, empty = unlimited)'),
-                onFieldSubmitted: (v) => _set(s.copyWith(rateLimit: v.trim())),
+              _CommitField(
+                label: 'Speed limit (e.g. 2M, empty = unlimited)',
+                value: s.rateLimit,
+                validate: validateRateLimit,
+                onCommit: (v) => _set(services.settings.value.copyWith(rateLimit: v.trim())),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -209,11 +215,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ]),
             _section('yt-dlp', [
-              Text('Installed: ${services.ytDlpVersion ?? 'unknown'}', style: const TextStyle(color: Palette.text2)),
+              ValueListenableBuilder<String?>(
+                valueListenable: services.ytDlpVersion,
+                builder: (context, v, _) =>
+                    Text('Installed: ${v ?? 'unknown'}', style: const TextStyle(color: Palette.text2)),
+              ),
               const SizedBox(height: 4),
               const Text(
                 'Websites change often. Update yt-dlp if a site stops working.',
                 style: TextStyle(color: Palette.muted, fontSize: 12),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Update automatically'),
+                subtitle: const Text(
+                  'At most once a day, and once more if a download fails because yt-dlp is outdated. '
+                  'Respects Wi-Fi only.',
+                ),
+                value: s.autoUpdateYtDlp,
+                onChanged: (v) => _set(s.copyWith(autoUpdateYtDlp: v)),
               ),
               const SizedBox(height: 8),
               Row(
@@ -256,7 +276,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: () => showLicensePage(context: context, applicationName: 'waydlp'),
                 child: const Text('Open-source licenses'),
               ),
-              TextButton(onPressed: () => _set(const Settings()), child: const Text('Reset settings to defaults')),
+              TextButton(
+                onPressed: () async {
+                  // The native saver keeps its own copy of the folder; reset it too,
+                  // or files kept going to the old folder while the UI said "default".
+                  await services.engine.setSaveLocation(null).catchError((_) {});
+                  await _set(const Settings());
+                },
+                child: const Text('Reset settings to defaults'),
+              ),
             ]),
           ],
         );
@@ -294,5 +322,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
         onChanged: (v) => onChanged(v.round()),
       ),
     ],
+  );
+}
+
+/// A text setting that is saved when submitted *or* when it loses focus
+/// (edits used to be lost unless the keyboard's Enter key was pressed), and
+/// that shows the stored value again after a reset or a rejected entry.
+class _CommitField extends StatefulWidget {
+  const _CommitField({required this.label, required this.value, required this.validate, required this.onCommit});
+
+  final String label;
+  final String value;
+  final void Function(String) validate;
+  final Future<void> Function(String) onCommit;
+
+  @override
+  State<_CommitField> createState() => _CommitFieldState();
+}
+
+class _CommitFieldState extends State<_CommitField> {
+  late final _controller = TextEditingController(text: widget.value);
+  final _focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(() {
+      if (!_focus.hasFocus) _commit();
+    });
+  }
+
+  @override
+  void didUpdateWidget(_CommitField old) {
+    super.didUpdateWidget(old);
+    if (old.value != widget.value && !_focus.hasFocus) _controller.text = widget.value;
+  }
+
+  void _commit() {
+    final v = _controller.text;
+    if (v.trim() == widget.value.trim()) return;
+    try {
+      widget.validate(v);
+      unawaited(widget.onCommit(v));
+    } on ArgsError catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      _controller.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextField(
+    controller: _controller,
+    focusNode: _focus,
+    decoration: InputDecoration(labelText: widget.label),
+    onSubmitted: (_) => _commit(),
+    onTapOutside: (_) => _focus.unfocus(),
   );
 }

@@ -31,10 +31,13 @@ class _AnalyzeScreenState extends State<AnalyzeScreen> {
   String _presetId = '';
   List<bool> _selected = const [];
   bool _started = false;
+  bool _adding = false;
+  late Engine _engine;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _engine = AppScope.of(context).engine;
     if (_started) return;
     _started = true;
     final s = AppScope.of(context).settings.value;
@@ -45,7 +48,8 @@ class _AnalyzeScreenState extends State<AnalyzeScreen> {
 
   @override
   void dispose() {
-    if (_loading) unawaited(AppScope.of(context).engine.cancelProbe().catchError((_) {}));
+    // Inherited widgets must not be looked up in dispose(); use the cached engine.
+    if (_loading) unawaited(_engine.cancelProbe().catchError((_) {}));
     super.dispose();
   }
 
@@ -91,6 +95,17 @@ class _AnalyzeScreenState extends State<AnalyzeScreen> {
   }
 
   Future<void> _download() async {
+    // A second tap while the first is being queued added the download twice.
+    if (_adding) return;
+    setState(() => _adding = true);
+    try {
+      await _addToQueue();
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  Future<void> _addToQueue() async {
     final s = AppScope.of(context);
     final nav = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -135,7 +150,7 @@ class _AnalyzeScreenState extends State<AnalyzeScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                 child: FilledButton.icon(
-                  onPressed: _download,
+                  onPressed: _adding ? null : _download,
                   icon: const Icon(Icons.download),
                   label: Text(
                     _result is PlaylistResult

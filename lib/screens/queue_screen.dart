@@ -25,6 +25,32 @@ class QueueScreen extends StatelessWidget {
             actions: [
               if (d.jobs.any((j) => j.state.isFinished))
                 TextButton(onPressed: d.clearFinished, child: const Text('Clear finished')),
+              if (d.jobs.isNotEmpty)
+                PopupMenuButton<String>(
+                  tooltip: 'More actions',
+                  onSelected: (v) => unawaited(switch (v) {
+                    'pause' => d.pauseAll(),
+                    'resume' => d.resumeAll(),
+                    _ => d.retryFailed(),
+                  }),
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'pause',
+                      enabled: d.jobs.any((j) => j.state.isActive),
+                      child: const Text('Pause all'),
+                    ),
+                    PopupMenuItem(
+                      value: 'resume',
+                      enabled: d.jobs.any((j) => j.state == JobState.paused),
+                      child: const Text('Resume all'),
+                    ),
+                    PopupMenuItem(
+                      value: 'retry',
+                      enabled: d.jobs.any((j) => j.state == JobState.failed),
+                      child: Text('Retry failed (${d.jobs.where((j) => j.state == JobState.failed).length})'),
+                    ),
+                  ],
+                ),
             ],
           ),
           if (d.jobs.isEmpty)
@@ -125,6 +151,19 @@ class _JobCard extends StatelessWidget {
                   onPressed: () => unawaited(d.resume(job)),
                   icon: const Icon(Icons.play_arrow),
                   label: const Text('Resume'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => unawaited(d.cancel(job)),
+                  icon: const Icon(Icons.close),
+                  label: const Text('Cancel'),
+                ),
+              ],
+              // Previously a job waiting for an automatic retry had no buttons at all.
+              if (job.state == JobState.waitingRetry) ...[
+                FilledButton.icon(
+                  onPressed: () => unawaited(d.resume(job)),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry now'),
                 ),
                 OutlinedButton.icon(
                   onPressed: () => unawaited(d.cancel(job)),

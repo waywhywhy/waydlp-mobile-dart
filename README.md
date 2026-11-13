@@ -21,7 +21,7 @@ A free, open-source media downloader for Android, powered by yt-dlp and FFmpeg r
 
 ## Install
 
-Download the signed **0.1.0** APKs from the [Releases page](https://github.com/waywhywhy/waydlp-mobile-dart/releases/tag/v0.1.0). Each release includes `SHA256SUMS.txt` for verification.
+Download the signed **0.2.0** APKs from the [Releases page](https://github.com/waywhywhy/waydlp-mobile-dart/releases/tag/v0.2.0). Each release includes `SHA256SUMS.txt` for verification.
 
 | File | For |
 |---|---|

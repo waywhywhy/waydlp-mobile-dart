@@ -30,17 +30,30 @@ class DownloadService : Service() {
         ensureChannels(this)
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
         ServiceCompat.startForeground(this, ONGOING_ID, buildOngoing(this), type)
+        foreground = true
         if (DownloadEngine.activeCount() == 0) stopSelfSafely()
         return START_NOT_STICKY
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        // Android 15+ limits dataSync services; stop gracefully (downloads can be resumed).
+        // Android 15+ limits dataSync services to 6 hours a day. Stopping only the
+        // service left yt-dlp running without protection, to be killed silently;
+        // pause every job instead (partial data is kept, so they can be resumed).
+        DownloadEngine.pauseAll(this)
+        timedOutNotice(this)
         stopSelfSafely()
+    }
+
+    override fun onDestroy() {
+        foreground = false
+        running = false
+        super.onDestroy()
     }
 
     private fun stopSelfSafely() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foreground = false
+        running = false
         stopSelf()
     }
 
@@ -48,8 +61,12 @@ class DownloadService : Service() {
         private const val CHANNEL_PROGRESS = "downloads"
         private const val CHANNEL_DONE = "completed"
         private const val ONGOING_ID = 1
+        private const val TIMEOUT_ID = 2
         @Volatile private var lastRefresh = 0L
         @Volatile private var running = false
+
+        /** True once startForeground() ran; stopping the service before that crashes on Android 12+. */
+        @Volatile private var foreground = false
 
         fun intent(ctx: Context) = Intent(ctx, DownloadService::class.java)
 
@@ -98,7 +115,10 @@ class DownloadService : Service() {
         @SuppressLint("MissingPermission") // checked by canNotify()
         fun refresh(ctx: Context) {
             if (DownloadEngine.activeCount() == 0) {
-                if (running) {
+                // If onStartCommand hasn't run yet, it stops the service itself
+                // after startForeground(); stopping it now would crash the app
+                // ("startForegroundService() did not then call startForeground()").
+                if (running && foreground) {
                     running = false
                     ctx.stopService(intent(ctx))
                 }
@@ -108,6 +128,20 @@ class DownloadService : Service() {
             if (now - lastRefresh < 1000) return
             lastRefresh = now
             if (canNotify(ctx)) NotificationManagerCompat.from(ctx).notify(ONGOING_ID, buildOngoing(ctx))
+        }
+
+        @SuppressLint("MissingPermission") // checked by canNotify()
+        private fun timedOutNotice(ctx: Context) {
+            if (!canNotify(ctx)) return
+            ensureChannels(ctx)
+            val n = NotificationCompat.Builder(ctx, CHANNEL_DONE)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle("Downloads paused")
+                .setContentText("Android's background time limit was reached. Open waydlp to resume.")
+                .setAutoCancel(true)
+                .setContentIntent(openApp(ctx))
+                .build()
+            NotificationManagerCompat.from(ctx).notify(TIMEOUT_ID, n)
         }
 
         @SuppressLint("MissingPermission") // checked by canNotify()

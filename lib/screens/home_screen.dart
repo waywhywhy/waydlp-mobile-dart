@@ -7,6 +7,7 @@ import '../app_scope.dart';
 import '../models/options.dart';
 import '../services/args.dart';
 import '../services/downloads.dart';
+import '../services/engine.dart';
 import '../services/progress.dart';
 import '../services/url.dart';
 import '../theme.dart';
@@ -24,6 +25,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _controller = TextEditingController();
   String? _error;
+  bool _adding = false;
 
   @override
   void dispose() {
@@ -57,6 +59,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _quick() async {
+    // A second tap while the first was being queued added the download twice.
+    if (_adding) return;
+    _adding = true;
+    try {
+      await _quickAdd();
+    } finally {
+      _adding = false;
+    }
+  }
+
+  Future<void> _quickAdd() async {
     final u = _validated();
     if (u == null) return;
     if (looksLikePlaylist(u) && !u.queryParameters.containsKey('v')) {
@@ -199,9 +212,29 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               const Text('Engine', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
               const SizedBox(height: 6),
-              Text(
-                'yt-dlp ${s.ytDlpVersion ?? 'not ready'} · FFmpeg built in',
-                style: const TextStyle(color: Palette.text2),
+              ValueListenableBuilder<String?>(
+                valueListenable: s.ytDlpVersion,
+                builder: (context, v, _) {
+                  final age = ytDlpAgeDays(v);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'yt-dlp ${v ?? (s.engineError == null ? 'version unknown' : 'not ready')} · FFmpeg built in',
+                        style: const TextStyle(color: Palette.text2),
+                      ),
+                      if (age != null && age > ytDlpStaleDays) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'This yt-dlp is $age days old. Sites such as YouTube block old versions, '
+                          'so downloads may fail.',
+                          style: const TextStyle(color: Palette.warning),
+                        ),
+                        _UpdateButton(engine: s.engine),
+                      ],
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 4),
               const Text(
@@ -212,6 +245,48 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Updates yt-dlp from the Home screen's "outdated" warning.
+class _UpdateButton extends StatefulWidget {
+  const _UpdateButton({required this.engine});
+  final Engine engine;
+
+  @override
+  State<_UpdateButton> createState() => _UpdateButtonState();
+}
+
+class _UpdateButtonState extends State<_UpdateButton> {
+  String? _error;
+
+  Future<void> _update() async {
+    setState(() => _error = null);
+    try {
+      await widget.engine.updateYtDlp();
+    } on EngineException catch (e) {
+      if (mounted) setState(() => _error = 'Update failed: ${e.message}');
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = widget.engine.isUpdating;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          FilledButton(onPressed: busy ? null : _update, child: Text(busy ? 'Updating…' : 'Update yt-dlp')),
+          if (_error != null) ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(_error!, style: const TextStyle(color: Palette.error, fontSize: 12)),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

@@ -153,11 +153,15 @@ class HistoryStore {
 
   Future<int> clear() => _db.delete('downloads', where: 'status != ?', whereArgs: [EntryStatus.inProgress.name]);
 
-  Future<int> markInterrupted() => _db.update(
+  /// Mark unfinished entries as interrupted, except those in [stillRunning]
+  /// (jobs the background service is still working on).
+  Future<int> markInterrupted({Set<int> stillRunning = const {}}) => _db.update(
     'downloads',
     {'status': EntryStatus.cancelled.name, 'error': 'Interrupted: the app was closed before the download finished.'},
-    where: 'status = ?',
-    whereArgs: [EntryStatus.inProgress.name],
+    where: stillRunning.isEmpty
+        ? 'status = ?'
+        : 'status = ? AND id NOT IN (${List.filled(stillRunning.length, '?').join(',')})',
+    whereArgs: [EntryStatus.inProgress.name, ...stillRunning],
   );
 
   Future<int> pruneOlderThan(int days) async {

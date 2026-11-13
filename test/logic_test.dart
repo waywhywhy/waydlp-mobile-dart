@@ -186,4 +186,42 @@ void main() {
       expect(presetById('mp4-720').options.summary, 'MP4 · 720p');
     });
   });
+
+  group('regressions', () {
+    test('shared text punctuation is not part of the link', () {
+      expect(firstUrlIn("Watch this (https://youtu.be/jNQXAC9IVRw).").toString(), 'https://youtu.be/jNQXAC9IVRw');
+      expect(firstUrlIn('see https://vimeo.com/1, https://x.com/2').toString(), 'https://vimeo.com/1');
+      expect(validateUrl('https://example.com/a?b=c!').toString(), 'https://example.com/a?b=c');
+      // Balanced brackets are part of the URL.
+      expect(
+        validateUrl('https://en.wikipedia.org/wiki/Foo_(bar)').toString(),
+        'https://en.wikipedia.org/wiki/Foo_(bar)',
+      );
+      expect(
+        firstUrlIn('(https://en.wikipedia.org/wiki/Foo_(bar))').toString(),
+        'https://en.wikipedia.org/wiki/Foo_(bar)',
+      );
+    });
+
+    test('HTTP 403 from an outdated yt-dlp asks for an update and is not retried', () {
+      final f = Failure.fromOutput(
+        'WARNING: Your yt-dlp version (2025.11.12) is older than 90 days!\n'
+        'ERROR: unable to download video data: HTTP Error 403: Forbidden',
+      );
+      expect(f.kind, ErrorKind.extractorOutdated);
+      expect(f.kind.isTransient, isFalse);
+      // A specific error line still wins over the old-version warning.
+      expect(
+        Failure.fromOutput('WARNING: version is older than 90 days\nERROR: [youtube] x: Private video').kind,
+        ErrorKind.private,
+      );
+    });
+
+    test('speed limit validation', () {
+      validateRateLimit('');
+      validateRateLimit('2M');
+      validateRateLimit('500k');
+      expect(() => validateRateLimit('fast'), throwsA(isA<ArgsError>()));
+    });
+  });
 }

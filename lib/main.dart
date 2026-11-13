@@ -27,15 +27,19 @@ Future<void> main() async {
 
   Map<String, Object?> info = const {};
   String? engineError;
+  var stillRunning = <int>{};
   try {
     // First start unpacks the embedded Python/yt-dlp/FFmpeg runtime.
     info = await engine.init();
     await downloads.drainBackgroundResults();
+    // The download service can outlive the UI (Back closes the app while it
+    // keeps downloading); those entries are not interrupted.
+    stillRunning = await engine.activeHistoryIds();
   } on EngineException catch (e) {
     engineError = '${e.message}\n${e.details}'.trim();
   }
   if (history != null) {
-    await history.markInterrupted();
+    await history.markInterrupted(stillRunning: stillRunning);
     await history.pruneOlderThan(settings.value.historyDays);
   }
 
@@ -52,4 +56,7 @@ Future<void> main() async {
       child: const WaydlpApp(),
     ),
   );
+
+  // Daily yt-dlp update (Settings › yt-dlp), after the UI is up.
+  if (engineError == null) unawaited(downloads.maybeAutoUpdate());
 }
