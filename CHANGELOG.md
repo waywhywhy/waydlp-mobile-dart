@@ -7,7 +7,7 @@ All notable changes to waydlp for Android. Format: [Keep a Changelog](https://ke
 ## [0.2.0] - 2026-11-13
 
 ### Added
-- Automatic yt-dlp updates (Settings › yt-dlp, on by default): at most once a day, and once more when a download fails because yt-dlp is outdated, after which the download is retried. Respects Wi-Fi only.
+- Automatic yt-dlp updates (Settings › yt-dlp, on by default): at most once a day, and once more when a download fails because yt-dlp is outdated, after which the download is retried. Respects Wi-Fi only. Updates wait until no analysis or download is using yt-dlp, so they never break a running one.
 - Home shows a warning with an Update button when yt-dlp is more than 90 days old.
 - Queue menu: Pause all, Resume all and Retry failed.
 - "Retry now" and "Cancel" for downloads waiting for an automatic retry.

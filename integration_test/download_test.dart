@@ -24,6 +24,20 @@ void main() {
     final probe = await tester.runAsync(() => services.engine.probe(url.toString(), buildProbeArgs(noPlaylist: true)));
     expect((jsonDecode(probe!) as Map)['ext'], 'wav');
 
+    // Regression: replacing yt-dlp while it ran broke that process
+    // ("zipimport.ZipImportError: bad local file header"). An update and an
+    // analysis started together must both succeed.
+    final both = await tester.runAsync(
+      () => Future.wait([
+        services.engine.updateYtDlp(),
+        services.engine.probe(url.toString(), buildProbeArgs(noPlaylist: true)),
+        services.engine.probe(url.toString(), buildProbeArgs(noPlaylist: true)),
+      ]),
+    );
+    expect((jsonDecode(both![1]) as Map)['ext'], 'wav');
+    expect((jsonDecode(both[2]) as Map)['ext'], 'wav');
+    expect(services.engine.version.value, isNotNull);
+
     for (final convert in [false, true]) {
       final job = await tester.runAsync(
         () => services.downloads.add(

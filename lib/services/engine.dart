@@ -118,14 +118,17 @@ class Engine {
     return m.map((k, v) => MapEntry(k.toString(), v.toString()));
   }
 
-  /// Update yt-dlp in place. Concurrent callers share one update.
-  Future<String> updateYtDlp() => _updating ??= _update().whenComplete(() => _updating = null);
+  /// Update yt-dlp in place. Concurrent callers share one update. The native
+  /// side waits up to [waitSeconds] for running analyses/downloads to finish,
+  /// because replacing yt-dlp under a running process breaks it.
+  Future<String> updateYtDlp({int waitSeconds = 60}) =>
+      _updating ??= _update(waitSeconds).whenComplete(() => _updating = null);
 
   /// Whether an update is running right now.
   bool get isUpdating => _updating != null;
 
-  Future<String> _update() async {
-    final r = await _call<String>('updateYtDlp') ?? 'unknown';
+  Future<String> _update(int waitSeconds) async {
+    final r = await _call<String>('updateYtDlp', {'waitSeconds': waitSeconds}) ?? 'unknown';
     try {
       version.value = await ytDlpVersion() ?? version.value;
     } on EngineException {

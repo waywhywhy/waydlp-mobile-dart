@@ -259,22 +259,25 @@ class Downloads extends ChangeNotifier {
         ..stage = 'Updating yt-dlp, then retrying…';
       final gen = ++job.retryGen;
       unawaited(
-        engine.updateYtDlp().then<void>(
-          (_) {
-            if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
-              unawaited(_start(job..attempts = 0));
-            }
-          },
-          onError: (Object e) {
-            if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
-              job
-                ..state = JobState.failed
-                ..stage = f.kind.title;
-              _recordHistory(job);
-              notifyListeners();
-            }
-          },
-        ),
+        // Other downloads may still be using yt-dlp; wait for them.
+        engine
+            .updateYtDlp(waitSeconds: 1800)
+            .then<void>(
+              (_) {
+                if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
+                  unawaited(_start(job..attempts = 0));
+                }
+              },
+              onError: (Object e) {
+                if (job.retryGen == gen && job.state == JobState.waitingRetry && jobs.contains(job)) {
+                  job
+                    ..state = JobState.failed
+                    ..stage = f.kind.title;
+                  _recordHistory(job);
+                  notifyListeners();
+                }
+              },
+            ),
       );
     } else if (retry && f.kind.isTransient && job.attempts <= retries) {
       job

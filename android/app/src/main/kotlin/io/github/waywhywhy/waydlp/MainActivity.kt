@@ -114,7 +114,9 @@ class MainActivity : FlutterActivity() {
                 val url = call.argument<String>("url")!!
                 val args = call.argument<List<String>>("args")!!
                 YoutubeDL.getInstance().destroyProcessById(PROBE_ID)
-                val response = YoutubeDL.getInstance().execute(YoutubeDLRequest(url).addCommands(args), PROBE_ID, null)
+                val response = YtDlpLock.shared {
+                    YoutubeDL.getInstance().execute(YoutubeDLRequest(url).addCommands(args), PROBE_ID, null)
+                }
                 response.out
             }
             "cancelProbe" -> {
@@ -146,7 +148,10 @@ class MainActivity : FlutterActivity() {
                 result.success(null)
             }
             "updateYtDlp" -> io(result) {
-                when (YoutubeDL.getInstance().updateYoutubeDL(ctx, YoutubeDL.UpdateChannel.STABLE)) {
+                // Waits until no analysis or download is using yt-dlp (replacing it
+                // under a running process broke that process).
+                val waitMs = (call.argument<Int>("waitSeconds") ?: 60).coerceIn(0, 3600) * 1000L
+                when (YtDlpLock.exclusive(waitMs) { YoutubeDL.getInstance().updateYoutubeDL(ctx, YoutubeDL.UpdateChannel.STABLE) }) {
                     YoutubeDL.UpdateStatus.DONE -> "Updated to ${YoutubeDL.getInstance().version(ctx)}"
                     YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> "Already up to date (${YoutubeDL.getInstance().version(ctx)})"
                     else -> "Update finished"

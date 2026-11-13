@@ -73,9 +73,9 @@ object DownloadEngine {
     fun ytDlpVersion(ctx: Context): String? {
         YoutubeDL.getInstance().version(ctx.applicationContext)?.let { return it }
         return try {
-            YoutubeDL.getInstance()
-                .execute(YoutubeDLRequest(emptyList()).addOption("--version"), "version", null)
-                .out.trim().lineSequence().firstOrNull()?.takeIf { it.isNotBlank() }
+            YtDlpLock.shared {
+                YoutubeDL.getInstance().execute(YoutubeDLRequest(emptyList()).addOption("--version"), "version", null)
+            }.out.trim().lineSequence().firstOrNull()?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
             Log.w(TAG, "yt-dlp --version failed", e)
             null
@@ -166,7 +166,8 @@ object DownloadEngine {
         try {
             if (rec.stopping) throw StoppedBeforeStart()
             val request = YoutubeDLRequest(rec.url).addCommands(rec.args)
-            YoutubeDL.getInstance().execute(request, rec.id) { _, _, line ->
+            // Shared lock: a yt-dlp update must not replace the program while it runs.
+            YtDlpLock.shared { YoutubeDL.getInstance().execute(request, rec.id) { _, _, line ->
                 if (line.startsWith("[waydlp:file]")) files += line.removePrefix("[waydlp:file]").trim()
                 if (line.startsWith("[waydlp:item]")) {
                     // index|count|id|title — remembered so background results get a real title.
@@ -176,7 +177,7 @@ object DownloadEngine {
                 if (line.startsWith("[waydlp:dl]")) updateProgress(rec, line)
                 emitJob("line", rec.id, mapOf("line" to line))
                 DownloadService.refresh(ctx)
-            }
+            } }
             val saved = mutableListOf<Map<String, Any?>>()
             for (path in files) {
                 val f = File(path)
