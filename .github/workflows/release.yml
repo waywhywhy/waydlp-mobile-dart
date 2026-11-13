@@ -31,6 +31,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: the version the release was tested with. Floating "stable"
+          # broke CI when Flutter 3.50 deprecated package:flutter/material.dart.
+          flutter-version: 3.47.9
           cache: true
       - name: Check version matches tag
         run: |

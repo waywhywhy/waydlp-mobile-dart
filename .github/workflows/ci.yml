@@ -31,6 +31,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: the version the release was tested with. Floating "stable"
+          # broke CI when Flutter 3.50 deprecated package:flutter/material.dart.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test integration_test
@@ -51,6 +54,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: the version the release was tested with. Floating "stable"
+          # broke CI when Flutter 3.50 deprecated package:flutter/material.dart.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - name: Enable emulator acceleration
@@ -85,6 +91,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: the version the release was tested with. Floating "stable"
+          # broke CI when Flutter 3.50 deprecated package:flutter/material.dart.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - run: flutter build apk --release --split-per-abi
