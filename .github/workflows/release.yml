@@ -86,4 +86,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" out/* --verify-tag --title "waydlp for Android $VERSION" --generate-notes
+        run: |
+          # Release notes: this version's CHANGELOG section, then GitHub's generated notes.
+          awk -v v="## [$VERSION]" 'index($0,v)==1{f=1;next} /^## \[/{if(f)exit} f' CHANGELOG.md > notes.md || true
+          gh release create "v$VERSION" out/* --verify-tag --title "waydlp for Android $VERSION" --notes-file notes.md --generate-notes
